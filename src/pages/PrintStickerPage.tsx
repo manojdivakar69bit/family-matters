@@ -1,0 +1,57 @@
+import { useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import PrintableSticker from "@/components/PrintableSticker";
+import { Card, CardContent } from "@/components/ui/card";
+import { AlertTriangle } from "lucide-react";
+
+const PrintStickerPage = () => {
+  const { code } = useParams<{ code: string }>();
+  const baseUrl = window.location.origin;
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["print-sticker", code],
+    queryFn: async () => {
+      const { data: qr, error: qrError } = await supabase
+        .from("qr_codes")
+        .select("id, code, status")
+        .eq("code", code!)
+        .maybeSingle();
+      if (qrError) throw qrError;
+      if (!qr) throw new Error("QR code not found");
+
+      const { data: customer } = await supabase
+        .from("customers")
+        .select("vehicle_number, blood_group")
+        .eq("qr_code_id", qr.id)
+        .maybeSingle();
+
+      return { qr, customer };
+    },
+    enabled: !!code,
+  });
+
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><p>Loading...</p></div>;
+
+  if (error || !data) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4">
+        <Card className="w-full max-w-md text-center">
+          <CardContent className="py-8">
+            <AlertTriangle className="h-12 w-12 text-destructive mx-auto mb-4" />
+            <h2 className="text-xl font-bold">Sticker Not Found</h2>
+            <p className="text-muted-foreground">This QR code does not exist.</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <PrintableSticker code={data.qr.code} vehicleNumber={data.customer?.vehicle_number} bloodGroup={data.customer?.blood_group} baseUrl={baseUrl} />
+    </div>
+  );
+};
+
+export default PrintStickerPage;
