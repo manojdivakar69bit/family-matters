@@ -217,7 +217,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      next_qr_code: { Args: never; Returns: string }
+      [_ in never]: never
     }
     Enums: {
       [_ in never]: never
