@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { QrCode, Users, Package, Plus, Trash2, ArrowLeft, LogOut } from "lucide-react";
+import { QrCode, Users, Package, Plus, Trash2, ArrowLeft, LogOut, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import PrintableSticker from "@/components/PrintableSticker";
 import BulkStickerPrintCard from "@/components/BulkStickerPrintCard";
@@ -51,6 +51,9 @@ const AdminPanel = () => {
     },
   });
 
+  const pendingAgents = agents.filter((a: any) => a.approval_status === "pending");
+  const approvedAgents = agents.filter((a: any) => a.approval_status === "approved");
+
   const generateQrMutation = useMutation({
     mutationFn: async (count: number) => {
       const { data: existing } = await supabase
@@ -58,18 +61,15 @@ const AdminPanel = () => {
         .select("code")
         .order("code", { ascending: false })
         .limit(1);
-      
       let maxNum = 0;
       if (existing && existing.length > 0) {
         const match = existing[0].code.match(/EMR-(\d+)/);
         if (match) maxNum = parseInt(match[1], 10);
       }
-
       const codes = [];
       for (let i = 1; i <= count; i++) {
         codes.push({ code: `EMR-${String(maxNum + i).padStart(4, "0")}` });
       }
-      
       const { error } = await supabase.from("qr_codes").insert(codes);
       if (error) throw error;
     },
@@ -80,9 +80,36 @@ const AdminPanel = () => {
     onError: () => toast.error("Failed to generate QR codes"),
   });
 
+  const approveAgentMutation = useMutation({
+    mutationFn: async (agentId: string) => {
+      const { error } = await supabase.from("agents").update({ approval_status: "approved" }).eq("id", agentId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      toast.success("Agent approved!");
+    },
+  });
+
+  const rejectAgentMutation = useMutation({
+    mutationFn: async (agentId: string) => {
+      const { error } = await supabase.from("agents").update({ approval_status: "rejected" }).eq("id", agentId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      toast.success("Agent rejected");
+    },
+  });
+
   const addAgentMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from("agents").insert({ name: agentName, phone: agentPhone, email: agentEmail || null });
+      const { error } = await supabase.from("agents").insert({
+        name: agentName,
+        phone: agentPhone,
+        email: agentEmail || "",
+        approval_status: "approved",
+      });
       if (error) throw error;
     },
     onSuccess: () => {
@@ -169,6 +196,36 @@ const AdminPanel = () => {
           ))}
         </div>
 
+        {/* Pending Agent Approvals */}
+        {pendingAgents.length > 0 && (
+          <Card className="border-warning">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-warning">
+                <Clock className="h-5 w-5" /> Pending Agent Approvals ({pendingAgents.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {pendingAgents.map((agent: any) => (
+                <div key={agent.id} className="flex items-center justify-between border-b pb-3">
+                  <div>
+                    <span className="font-medium">{agent.name}</span>
+                    <span className="text-xs text-muted-foreground ml-2">{agent.email}</span>
+                    <span className="text-xs text-muted-foreground ml-2">{agent.phone || "No phone"}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button size="sm" onClick={() => approveAgentMutation.mutate(agent.id)} className="bg-green-600 hover:bg-green-700">
+                      <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
+                    </Button>
+                    <Button size="sm" variant="destructive" onClick={() => rejectAgentMutation.mutate(agent.id)}>
+                      <XCircle className="h-4 w-4 mr-1" /> Reject
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader><CardTitle className="flex items-center gap-2"><QrCode className="h-5 w-5" /> Generate QR Codes</CardTitle></CardHeader>
           <CardContent className="flex gap-2">
@@ -189,7 +246,7 @@ const AdminPanel = () => {
             <Select value={assignAgentId} onValueChange={setAssignAgentId}>
               <SelectTrigger><SelectValue placeholder="Select agent" /></SelectTrigger>
               <SelectContent>
-                {agents.map((a: any) => (
+                {approvedAgents.map((a: any) => (
                   <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
                 ))}
               </SelectContent>
@@ -221,7 +278,7 @@ const AdminPanel = () => {
         </Card>
 
         <Card>
-          <CardHeader><CardTitle className="flex items-center gap-2"><Users className="h-5 w-5" /> Agents ({agents.length})</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="flex items-center gap-2"><Users className="h-5 w-5" /> Agents ({approvedAgents.length})</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-3 gap-2">
               <Input placeholder="Name" value={agentName} onChange={(e) => setAgentName(e.target.value)} />
@@ -231,7 +288,7 @@ const AdminPanel = () => {
             <Button onClick={() => addAgentMutation.mutate()} disabled={!agentName || !agentPhone}>
               <Plus className="mr-2 h-4 w-4" /> Add Agent
             </Button>
-            {agents.map((agent: any) => {
+            {approvedAgents.map((agent: any) => {
               const stats = getAgentStats(agent.id);
               return (
                 <div key={agent.id} className="flex items-center justify-between border-b pb-2">

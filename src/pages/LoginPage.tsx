@@ -22,11 +22,58 @@ const LoginPage = () => {
   const panelLabel = isAdmin ? "Admin" : "Agent";
   const redirectPath = isAdmin ? "/admin" : "/agent";
 
+  const checkAdminRole = async (userId: string) => {
+    const { data } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId)
+      .eq("role", "admin")
+      .maybeSingle();
+    return !!data;
+  };
+
+  const checkAgentApproval = async (userId: string) => {
+    const { data } = await supabase
+      .from("agents")
+      .select("approval_status")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (!data) return "not_found";
+    return data.approval_status;
+  };
+
   const handleLogin = async () => {
     setLoading(true);
     try {
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
+
+      if (isAdmin) {
+        const isAdminUser = await checkAdminRole(data.user.id);
+        if (!isAdminUser) {
+          await supabase.auth.signOut();
+          toast.error("You are not authorized as an admin");
+          return;
+        }
+      } else {
+        const status = await checkAgentApproval(data.user.id);
+        if (status === "pending") {
+          await supabase.auth.signOut();
+          toast.error("Your account is pending admin approval");
+          return;
+        }
+        if (status === "rejected") {
+          await supabase.auth.signOut();
+          toast.error("Your account has been rejected by admin");
+          return;
+        }
+        if (status === "not_found") {
+          await supabase.auth.signOut();
+          toast.error("Agent profile not found. Please sign up first.");
+          return;
+        }
+      }
+
       localStorage.setItem("cmf_role", role);
       localStorage.setItem("cmf_email", data.user?.email || "");
       toast.success(`Logged in as ${panelLabel}`);
@@ -39,11 +86,24 @@ const LoginPage = () => {
   };
 
   const handleSignUp = async () => {
+    if (isAdmin) return;
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await supabase.auth.signUp({ email, password });
       if (error) throw error;
-      toast.success("Account created! Check your email to verify, then sign in.");
+
+      // Create agent record with pending status
+      if (data.user) {
+        await supabase.from("agents").insert({
+          name: email.split("@")[0],
+          phone: "",
+          email,
+          user_id: data.user.id,
+          approval_status: "pending",
+        });
+      }
+
+      toast.success("Account created! Please wait for admin approval before signing in.");
     } catch (error: any) {
       toast.error(error.message || "Failed to create account");
     } finally {
@@ -60,9 +120,44 @@ const LoginPage = () => {
       if (result.error) { toast.error("Google sign-in failed"); return; }
       if (result.redirected) return;
       const { data: { session } } = await supabase.auth.getSession();
-      const userEmail = session?.user?.email || "";
+      if (!session) { toast.error("No session found"); return; }
+
+      if (isAdmin) {
+        const isAdminUser = await checkAdminRole(session.user.id);
+        if (!isAdminUser) {
+          await supabase.auth.signOut();
+          toast.error("You are not authorized as an admin");
+          return;
+        }
+      } else {
+        const status = await checkAgentApproval(session.user.id);
+        if (status === "not_found") {
+          // Auto-create agent record
+          await supabase.from("agents").insert({
+            name: session.user.email?.split("@")[0] || "Agent",
+            phone: "",
+            email: session.user.email || "",
+            user_id: session.user.id,
+            approval_status: "pending",
+          });
+          await supabase.auth.signOut();
+          toast.error("Account created! Please wait for admin approval.");
+          return;
+        }
+        if (status === "pending") {
+          await supabase.auth.signOut();
+          toast.error("Your account is pending admin approval");
+          return;
+        }
+        if (status === "rejected") {
+          await supabase.auth.signOut();
+          toast.error("Your account has been rejected");
+          return;
+        }
+      }
+
       localStorage.setItem("cmf_role", role);
-      localStorage.setItem("cmf_email", userEmail);
+      localStorage.setItem("cmf_email", session.user.email || "");
       toast.success(`Signed in with Google as ${panelLabel}`);
       navigate(redirectPath);
     } catch (error: any) {
@@ -82,7 +177,9 @@ const LoginPage = () => {
             <ScanLine className="h-10 w-10 mx-auto text-primary mb-2" />
           )}
           <CardTitle>{panelLabel} Login</CardTitle>
-          <p className="text-sm text-muted-foreground">Sign in to access the {panelLabel} Panel</p>
+          <p className="text-sm text-muted-foreground">
+            {isAdmin ? "Admin access only" : "Sign in to access the Agent Panel"}
+          </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <Button className="w-full" variant="outline" onClick={handleGoogleSignIn} disabled={loading}>
@@ -113,9 +210,11 @@ const LoginPage = () => {
           <Button className="w-full" onClick={handleLogin} disabled={loading}>
             {loading ? "Signing in..." : "Sign In"}
           </Button>
-          <Button className="w-full" variant="outline" onClick={handleSignUp} disabled={loading}>
-            Create Account
-          </Button>
+          {!isAdmin && (
+            <Button className="w-full" variant="outline" onClick={handleSignUp} disabled={loading}>
+              Create Agent Account
+            </Button>
+          )}
           <Link to="/">
             <Button variant="ghost" className="w-full mt-2"><ArrowLeft className="mr-2 h-4 w-4" /> Back</Button>
           </Link>
